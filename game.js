@@ -602,7 +602,7 @@ function analyze(board) {
         const avgSteps = totalSteps / sims;
 
         // Combined score – زيادة وزن البقاء بشكل كبير
-        const combined = expectScore * 0.55 + avgSteps * 450 * 0.45;
+        const combined = expectScore * 0.4 + avgSteps * 500 * 0.6;
 
         candidates.push({
             dir: DIRS[d],
