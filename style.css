@@ -727,7 +727,7 @@ width: 100%;
 }
 
 .main-logo {
-width: min(85%, 320px);
+width: min(100%, 500px);
 height: auto;
 object-fit: contain;
 display: block;
