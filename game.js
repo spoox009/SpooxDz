@@ -1,877 +1,1283 @@
 /* ================================================================
-   BEAST MERGE – game.js (نسخة مستقرة ومحسنة)
-   جميع حقوق اللعبة ومنطق الذكاء الاصطناعي
+   BEAST MERGE – game.js
+   All game logic, UI, and AI worker (embedded as Blob URL)
    ================================================================ */
 
 /* ----------------------------------------------------------------
-   بيانات الحيوانات
+   ANIMAL DATA
    ---------------------------------------------------------------- */
-const IMG_V = '2'; // غيّر هذا الرقم عند تغيير الصور
-
 const ANIMALS = [
-  null,
-  { name: '', img: `image/Camel.png?v=${IMG_V}`,    color: '#4caf50' }, // 1
-  { name: '', img: `image/Eagle.png?v=${IMG_V}`,    color: '#00bcd4' }, // 2
-  { name: '', img: `image/Panther.png?v=${IMG_V}`,  color: '#2196f3' }, // 3
-  { name: '', img: `image/Lion.png?v=${IMG_V}`,     color: '#3f51b5' }, // 4
-  { name: '', img: `image/Wolf.png?v=${IMG_V}`,     color: '#9c27b0' }, // 5
-  { name: '', img: `image/Seahorse.png?v=${IMG_V}`, color: '#673ab7' }, // 6
-  { name: '', img: `image/Horse.png?v=${IMG_V}`,    color: '#ff8f00' }, // 7
-  { name: '', img: `image/Bear.png?v=${IMG_V}`,     color: '#f4511e' }, // 8
-  { name: '', img: `image/Elephant.png?v=${IMG_V}`, color: '#e53935' }, // 9
-  { name: '', img: `image/Bull.png?v=${IMG_V}`,     color: '#c2185b' }, // 10
-  { name: '', img: `image/Spirit.png?v=${IMG_V}`,   color: '#ffd700' }, // 11
+    null, // 0  – فارغ
+    {
+        name: 'جمل',
+        img: 'image/Camel.png',
+        color: '#4caf50'
+    }, // 1
+    {
+        name: 'نسر',
+        img: 'image/Eagle.png',
+        color: '#00bcd4'
+    }, // 2
+    {
+        name: 'نمر',
+        img: 'image/Panther.png',
+        color: '#2196f3'
+    }, // 3
+    {
+        name: 'أسد',
+        img: 'image/Lion.png',
+        color: '#3f51b5'
+    }, // 4
+    {
+        name: 'ذئب',
+        img: 'image/Wolf.png',
+        color: '#9c27b0'
+    }, // 5
+    {
+        name: 'حصان البحر',
+        img: 'image/Seahorse.png',
+        color: '#673ab7'
+    }, // 6
+    {
+        name: 'حصان',
+        img: 'image/Horse.png',
+        color: '#ff8f00'
+    }, // 7
+    {
+        name: 'دب',
+        img: 'image/Bear.png',
+        color: '#f4511e'
+    }, // 8
+    {
+        name: 'فيل',
+        img: 'image/Elephant.png',
+        color: '#e53935'
+    }, // 9
+    {
+        name: 'ثور',
+        img: 'image/Bull.png',
+        color: '#c2185b'
+    }, // 10
+    {
+        name: 'روح',
+        img: 'image/Spirit.png',
+        color: '#ffd700'
+    }, // 11 (عابر)
 ];
 
-/* ----------------------------------------------------------------
-   منطق اللعبة الأساسي (نقي)
-   ---------------------------------------------------------------- */
+/* Spawn probability weights (levels 1–5 only) */
+const SPAWN_PROBS = [0.35, 0.25, 0.20, 0.12, 0.08]; // مجموع = 1
 
-// دمج صف نحو اليسار مع قاعدة n+n → n+1 (بدون حدود خاطئة)
+/* ================================================================
+   PURE GAME LOGIC  (no DOM)
+   ================================================================ */
+
+/** Slide a 4-element row toward index 0 with n+n→n+1 merge. */
 function slideRowLeft(row) {
-  // إزالة الأصفار
-  let tiles = row.filter(v => v !== 0);
-  let merged = [];
-  let i = 0;
-  while (i < tiles.length) {
-    if (i + 1 < tiles.length && tiles[i] === tiles[i + 1]) {
-      // دمج: n + n = n + 1 (إذا كانت النتيجة 11 فإنها ستُزال لاحقاً)
-      merged.push(tiles[i] + 1);
-      i += 2;
-    } else {
-      merged.push(tiles[i]);
-      i++;
+    const tiles = row.filter(v => v !== 0);
+    const merged = [];
+    let i = 0;
+    while (i < tiles.length) {
+        if (i + 1 < tiles.length && tiles[i] === tiles[i + 1]) {
+            merged.push(tiles[i] + 1); // n+n → n+1  (could produce 11)
+            i += 2;
+        } else {
+            merged.push(tiles[i]);
+            i++;
+        }
     }
-  }
-  // إعادة تعبئة الصف حتى 4 عناصر
-  while (merged.length < 4) merged.push(0);
-  return merged;
+    while (merged.length < 4) merged.push(0);
+    return merged;
 }
 
-// تطبيق حركة على اللوحة (المصفوفة مسطحة بطول 16)
-// تُرجع { board: المصفوفة الجديدة, changed: هل تغيرت, level11Count: عدد 11 التي أزيلت }
+/**
+ * Apply a move to the board.
+ * Returns { board, changed, level11Count }
+ * Level-11 tiles are replaced with 0 BEFORE returning (per spec).
+ */
 function applyMove(board, direction) {
-  let newBoard = board.slice(); // نسخ
-  let changed = false;
+    const result = board.slice();
+    let changed = false;
 
-  if (direction === 'left' || direction === 'right') {
-    for (let r = 0; r < 4; r++) {
-      const idx = r * 4;
-      const row = newBoard.slice(idx, idx + 4);
-      let newRow;
-      if (direction === 'left') {
-        newRow = slideRowLeft(row);
-      } else { // right
-        newRow = slideRowLeft(row.slice().reverse()).reverse();
-      }
-      // التحقق من التغيير
-      for (let c = 0; c < 4; c++) {
-        if (newRow[c] !== newBoard[idx + c]) {
-          changed = true;
-          newBoard[idx + c] = newRow[c];
+    if (direction === 'left' || direction === 'right') {
+        for (let r = 0; r < 4; r++) {
+            const row = result.slice(r * 4, r * 4 + 4);
+            const newRow = direction === 'left' ?
+                slideRowLeft(row) :
+                slideRowLeft([...row].reverse()).reverse();
+            for (let c = 0; c < 4; c++) {
+                if (newRow[c] !== row[c]) changed = true;
+                result[r * 4 + c] = newRow[c];
+            }
         }
-      }
-    }
-  } else { // up / down
-    for (let c = 0; c < 4; c++) {
-      const col = [
-        newBoard[c],
-        newBoard[4 + c],
-        newBoard[8 + c],
-        newBoard[12 + c]
-      ];
-      let newCol;
-      if (direction === 'up') {
-        newCol = slideRowLeft(col);
-      } else { // down
-        newCol = slideRowLeft(col.slice().reverse()).reverse();
-      }
-      for (let r = 0; r < 4; r++) {
-        if (newCol[r] !== newBoard[r * 4 + c]) {
-          changed = true;
-          newBoard[r * 4 + c] = newCol[r];
+    } else {
+        for (let c = 0; c < 4; c++) {
+            const col = [result[c], result[4 + c], result[8 + c], result[12 + c]];
+            const newCol = direction === 'up' ?
+                slideRowLeft(col) :
+                slideRowLeft([...col].reverse()).reverse();
+            for (let r = 0; r < 4; r++) {
+                if (newCol[r] !== col[r]) changed = true;
+                result[r * 4 + c] = newCol[r];
+            }
         }
-      }
     }
-  }
 
-  // إزالة المستوى 11 فوراً (وفقاً للقواعد)
-  let level11Count = 0;
-  for (let i = 0; i < 16; i++) {
-    if (newBoard[i] === 11) {
-      newBoard[i] = 0;
-      level11Count++;
-      changed = true;
+    // Level-11 removal (happens immediately, before spawn)
+    let level11Count = 0;
+    for (let i = 0; i < 16; i++) {
+        if (result[i] === 11) {
+            result[i] = 0;
+            level11Count++;
+            changed = true;
+        }
     }
-  }
 
-  return { board: newBoard, changed, level11Count };
+    return {
+        board: result,
+        changed,
+        level11Count
+    };
 }
 
-// التحقق من نهاية اللعبة (لا حركات ممكنة)
+/** True if no direction produces any change. */
 function isGameOver(board) {
-  return ['left', 'right', 'up', 'down'].every(dir => !applyMove(board, dir).changed);
+    return ['left', 'right', 'up', 'down'].every(d => !applyMove(board, d).changed);
 }
 
-// توليد لوحة عشوائية بمستويات 1-6 (مع ضمان وجود 5 أو 6)
+/** Random board with 4–8 non-empty tiles (levels 1–6). */
 function generateRandomBoard() {
-  const board = new Array(16).fill(0);
-  const count = 5 + Math.floor(Math.random() * 4); // 5-8 tiles
-  const positions = [...Array(16).keys()].sort(() => Math.random() - 0.5).slice(0, count);
-  const highCount = 1 + Math.floor(Math.random() * 2); // 1-2 tiles من 5 أو 6
-  positions.slice(0, highCount).forEach(p => board[p] = 5 + Math.floor(Math.random() * 2));
-  positions.slice(highCount).forEach(p => board[p] = 1 + Math.floor(Math.random() * 6));
-  return board;
+    const b = new Array(16).fill(0);
+    const count = 4 + Math.floor(Math.random() * 5);
+    const positions = [...Array(16).keys()].sort(() => Math.random() - 0.5).slice(0, count);
+    positions.forEach(p => {
+        b[p] = 1 + Math.floor(Math.random() * 6);
+    });
+    return b;
 }
 
-/* ----------------------------------------------------------------
-   الذكاء الاصطناعي (مضمن داخل Web Worker)
-   ---------------------------------------------------------------- */
+/* ================================================================
+   AI WORKER  (embedded as Blob URL – مع spawn ديناميكي حسب أكبر رقم)
+   ================================================================ */
 const WORKER_SOURCE = `
 "use strict";
 
-// إعدادات ثابتة
-const CFG = {
-  TARGET: 11,
-  SPAWN_LEVELS: [1,2,3,4,5],
-  ENDGAME_EMPTY: 3,
-  MC_MAX_STEPS: 80
-};
+// Direction names
+const DIRS = ["left", "right", "up", "down"];
 
-const DIR_NAMES = ['left','right','up','down'];
+// Spawn levels (1-5 only)
+const SPAWN_LEVELS = [1, 2, 3, 4, 5];
+// الاحتمالات الأساسية (ستُستبدل ديناميكياً)
+const BASE_PROBS = [0.35, 0.25, 0.20, 0.12, 0.08];
 
-// دالة احتمالات spawn تعتمد على أكبر رقم في اللوحة
-function getSpawnProbs(maxTile) {
-  if (maxTile >= 10) return [0.15, 0.35, 0.30, 0.15, 0.05]; // 1 نادر، 2,3,4 كثير
-  if (maxTile >= 8) return [0.20, 0.30, 0.25, 0.15, 0.10];
-  if (maxTile >= 6) return [0.25, 0.30, 0.20, 0.15, 0.10];
-  if (maxTile >= 4) return [0.35, 0.30, 0.20, 0.10, 0.05];
-  return [0.50, 0.25, 0.15, 0.07, 0.03];
+// Zobrist hashing table
+const Z = [];
+for (let i = 0; i < 16; i++) {
+    Z[i] = [];
+    for (let v = 0; v <= 11; v++) {
+        Z[i][v] = Math.floor(Math.random() * 2147483647);
+    }
 }
 
-function randomSpawnLevel(maxTile) {
-  const probs = getSpawnProbs(maxTile);
-  const r = Math.random();
-  let cum = 0;
-  for (let i=0; i<CFG.SPAWN_LEVELS.length; i++) {
-    cum += probs[i];
-    if (r < cum) return CFG.SPAWN_LEVELS[i];
-  }
-  return 1;
+function hash(board) {
+    let h = 0;
+    for (let i = 0; i < 16; i++) h ^= Z[i][board[i]];
+    return h;
 }
 
-// جداول الانزلاق المحسوبة مسبقاً (bitboard)
-const ROW_LEFT = new Uint16Array(65536);
-const ROW_REV = new Uint16Array(65536);
-const ROW_CHGD = new Uint8Array(65536);
-const ROW_CRTD = new Uint8Array(65536);
-(function buildRowTables() {
-  for (let row=0; row<65536; row++) {
-    const c0 = row & 0xF, c1 = (row>>4)&0xF, c2 = (row>>8)&0xF, c3 = (row>>12)&0xF;
-    ROW_REV[row] = c3 | (c2<<4) | (c1<<8) | (c0<<12);
+// Transposition table
+const TT = new Map();
+const TT_MAX_SIZE = 500000;
+
+function ttGet(key, depth) {
+    const entry = TT.get(key);
+    return entry && entry.depth >= depth ? entry.value : null;
+}
+
+function ttSet(key, depth, value) {
+    if (TT.size > TT_MAX_SIZE) TT.clear();
+    TT.set(key, { depth, value });
+}
+
+// Helper: copy board
+function copyBoard(b) {
+    return b.slice();
+}
+
+// Get empty cell indices
+function emptyCells(board) {
+    const e = [];
+    for (let i = 0; i < 16; i++) if (board[i] === 0) e.push(i);
+    return e;
+}
+
+// Count empty cells
+function emptyCount(board) {
+    let cnt = 0;
+    for (let i = 0; i < 16; i++) if (board[i] === 0) cnt++;
+    return cnt;
+}
+
+// Process a line of 4 tiles (left to right), return new line, merge count, and if spirit (11) appeared
+function processLine(a, b, c, d) {
     const tiles = [];
-    if (c0) tiles.push(c0); if (c1) tiles.push(c1); if (c2) tiles.push(c2); if (c3) tiles.push(c3);
-    const out = []; let created=false; let i=0;
-    while (i<tiles.length) {
-      if (i+1 < tiles.length && tiles[i] === tiles[i+1]) {
-        const m = tiles[i] + 1;
-        if (m >= CFG.TARGET) { out.push(0); created=true; } else out.push(m);
-        i += 2;
-      } else { out.push(tiles[i]); i++; }
-    }
-    while (out.length < 4) out.push(0);
-    const res = out[0] | (out[1]<<4) | (out[2]<<8) | (out[3]<<12);
-    ROW_LEFT[row] = res;
-    ROW_CHGD[row] = (res !== row) ? 1 : 0;
-    ROW_CRTD[row] = created ? 1 : 0;
-  }
-})();
+    if (a) tiles.push(a);
+    if (b) tiles.push(b);
+    if (c) tiles.push(c);
+    if (d) tiles.push(d);
 
-// Zobrist hashing
-const Z_LO = new Int32Array(192);
-const Z_HI = new Int32Array(192);
-for (let i=0; i<192; i++) {
-  Z_LO[i] = (Math.random() * 0x100000000) | 0;
-  Z_HI[i] = (Math.random() * 0x100000000) | 0;
-}
-function boardHash(board) {
-  let lo=0, hi=0;
-  for (let i=0; i<16; i++) {
-    const k = i*12 + board[i];
-    lo ^= Z_LO[k]; hi ^= Z_HI[k];
-  }
-  return {lo,hi};
-}
+    const merged = [];
+    let i = 0;
+    let merges = 0;
+    let spirit = false;
 
-// جدول التحويل (Transposition Table) بذاكرة 262144 خانة
-const TT_SIZE = 1<<18, TT_MASK = TT_SIZE-1;
-const TT_HLO = new Int32Array(TT_SIZE);
-const TT_HHI = new Int32Array(TT_SIZE);
-const TT_SCORE = new Float64Array(TT_SIZE);
-const TT_DEPTH = new Int8Array(TT_SIZE);
-const TT_USED = new Uint8Array(TT_SIZE);
-function ttClear() { TT_USED.fill(0); }
-function ttProbe(lo,hi,depth) {
-  const idx = (lo>>>0) & TT_MASK;
-  return (TT_USED[idx] && TT_HLO[idx]===lo && TT_HHI[idx]===hi && TT_DEPTH[idx]>=depth) ? TT_SCORE[idx] : null;
-}
-function ttStore(lo,hi,score,depth) {
-  const idx = (lo>>>0) & TT_MASK;
-  if (!TT_USED[idx] || TT_DEPTH[idx] <= depth) {
-    TT_HLO[idx]=lo; TT_HHI[idx]=hi; TT_SCORE[idx]=score; TT_DEPTH[idx]=depth; TT_USED[idx]=1;
-  }
-}
-
-// أوزان snake (8 اتجاهات)
-const SNAKE_W = [65536,32768,16384,8192,4096,2048,1024,512,256,128,64,32,16,8,4,2];
-const SNAKE_ORDERS = [
-  [0,1,2,3,7,6,5,4,8,9,10,11,15,14,13,12],
-  [0,4,8,12,13,9,5,1,2,6,10,14,15,11,7,3],
-  [3,2,1,0,4,5,6,7,11,10,9,8,12,13,14,15],
-  [3,7,11,15,14,10,6,2,1,5,9,13,12,8,4,0],
-  [12,13,14,15,11,10,9,8,4,5,6,7,3,2,1,0],
-  [12,8,4,0,1,5,9,13,14,10,6,2,3,7,11,15],
-  [15,14,13,12,8,9,10,11,7,6,5,4,0,1,2,3],
-  [15,11,7,3,2,6,10,14,13,9,5,1,0,4,8,12]
-];
-const WEIGHT_MAPS = SNAKE_ORDERS.map(order => {
-  const m = new Array(16).fill(0);
-  for (let i=0; i<16; i++) m[order[i]] = SNAKE_W[i];
-  return m;
-});
-const POS_IMP = new Array(16).fill(0);
-for (let i=0; i<16; i++) for (const wm of WEIGHT_MAPS) if (wm[i] > POS_IMP[i]) POS_IMP[i] = wm[i];
-
-// تطبيق الحركة على مصفوفة Uint8Array (تعديل في المكان)
-function applyDir(b, dir) {
-  let changed=false, created=false;
-  if (dir===0 || dir===1) { // left/right
-    for (let r=0; r<4; r++) {
-      const o = r*4;
-      const p = b[o] | (b[o+1]<<4) | (b[o+2]<<8) | (b[o+3]<<12);
-      const rp = dir===0 ? p : ROW_REV[p];
-      if (!ROW_CHGD[rp]) continue;
-      const res = dir===0 ? ROW_LEFT[rp] : ROW_REV[ROW_LEFT[rp]];
-      b[o] = res & 0xF; b[o+1] = (res>>4)&0xF; b[o+2] = (res>>8)&0xF; b[o+3] = (res>>12)&0xF;
-      changed = true;
-      if (ROW_CRTD[rp]) created = true;
-    }
-  } else { // up/down
-    for (let c=0; c<4; c++) {
-      const p = b[c] | (b[c+4]<<4) | (b[c+8]<<8) | (b[c+12]<<12);
-      const rp = dir===2 ? p : ROW_REV[p];
-      if (!ROW_CHGD[rp]) continue;
-      const res = dir===2 ? ROW_LEFT[rp] : ROW_REV[ROW_LEFT[rp]];
-      b[c] = res & 0xF; b[c+4] = (res>>4)&0xF; b[c+8] = (res>>8)&0xF; b[c+12] = (res>>12)&0xF;
-      changed = true;
-      if (ROW_CRTD[rp]) created = true;
-    }
-  }
-  return {changed, created};
-}
-
-// التحقق من إمكانية الحركة
-function canMove(b, dir) {
-  if (dir===0 || dir===1) {
-    for (let r=0; r<4; r++) {
-      const o = r*4;
-      const p = b[o] | (b[o+1]<<4) | (b[o+2]<<8) | (b[o+3]<<12);
-      if (ROW_CHGD[dir===0 ? p : ROW_REV[p]]) return true;
-    }
-  } else {
-    for (let c=0; c<4; c++) {
-      const p = b[c] | (b[c+4]<<4) | (b[c+8]<<8) | (b[c+12]<<12);
-      if (ROW_CHGD[dir===2 ? p : ROW_REV[p]]) return true;
-    }
-  }
-  return false;
-}
-
-// دالة التقييم (مشابهة للنسخة السابقة ولكنها مختصرة)
-function evaluate(b) {
-  let empty=0, maxTile=0, maxIdx=-1;
-  const cnt = new Array(12).fill(0);
-  for (let i=0; i<16; i++) {
-    const v = b[i];
-    if (v===0) empty++;
-    else { cnt[v]++; if (v>maxTile) { maxTile=v; maxIdx=i; } }
-  }
-  if (empty===0) return -1e9;
-
-  // أساس البقاء: الخلايا الفارغة
-  let score = empty * 20000;
-
-  // snake gradient
-  let bestSnake = -Infinity;
-  for (let p=0; p<8; p++) {
-    const w = WEIGHT_MAPS[p];
-    let s=0;
-    for (let i=0; i<16; i++) s += b[i] * w[i];
-    if (s > bestSnake) bestSnake = s;
-  }
-  score += bestSnake;
-
-  // مكافأة الزاوية لأكبر رقم
-  if (maxIdx===0 || maxIdx===3 || maxIdx===12 || maxIdx===15) score += 300000;
-  else if (maxIdx>=0) {
-    const mr = maxIdx>>2, mc = maxIdx&3;
-    score -= Math.min(mr+mc, mr+(3-mc), (3-mr)+mc, (3-mr)+(3-mc)) * 80000;
-  }
-
-  // مكافآت للدمجات القريبة من 11
-  for (let r=0; r<4; r++) {
-    for (let c=0; c<3; c++) {
-      const a = b[r*4+c], bv = b[r*4+c+1];
-      if (a>0 && a===bv) {
-        if (a===10) score += 4000000;
-        else if (a===9) score += 600000;
-        else if (a===8) score += 120000;
-        else score += a*a*200;
-      }
-    }
-  }
-  for (let c=0; c<4; c++) {
-    for (let r=0; r<3; r++) {
-      const a = b[r*4+c], bv = b[(r+1)*4+c];
-      if (a>0 && a===bv) {
-        if (a===10) score += 4000000;
-        else if (a===9) score += 600000;
-        else if (a===8) score += 120000;
-        else score += a*a*200;
-      }
-    }
-  }
-
-  return score;
-}
-
-// متغير الوقت المتبقي
-let deadline = 0;
-
-// Expectimax مع جدول التحويل
-function expectimax(b, depth, isMax, hlo, hhi) {
-  if (Date.now() >= deadline) return evaluate(b);
-
-  const klo = isMax ? (hlo ^ 0x5A5A5A5A) : hlo;
-  const khi = isMax ? (hhi ^ 0xA5A5A5A5) : hhi;
-  const cached = ttProbe(klo, khi, depth);
-  if (cached !== null) return cached;
-
-  let score;
-  if (isMax) {
-    score = -Infinity;
-    for (let d=0; d<4; d++) {
-      const nb = b.slice();
-      if (!applyDir(nb, d).changed) continue;
-      let nhlo=0, nhhi=0;
-      for (let i=0; i<16; i++) {
-        const k = i*12 + nb[i]; nhlo ^= Z_LO[k]; nhhi ^= Z_HI[k];
-      }
-      const s = expectimax(nb, depth, false, nhlo, nhhi);
-      if (s > score) score = s;
-    }
-    if (score === -Infinity) score = -1e6;
-  } else {
-    const empty = [];
-    for (let i=0; i<16; i++) if (b[i]===0) empty.push(i);
-    if (empty.length===0 || depth<=0) {
-      score = evaluate(b);
-    } else {
-      let maxTile = 0;
-      for (let i=0; i<16; i++) if (b[i] > maxTile) maxTile = b[i];
-      const probs = getSpawnProbs(maxTile);
-      const sample = empty.length <= 10 ? empty : empty.slice().sort((a,bi)=>POS_IMP[bi]-POS_IMP[a]).slice(0,5);
-      const posW = 1 / sample.length;
-      score = 0;
-      for (const idx of sample) {
-        const baseHlo = hlo ^ Z_LO[idx*12];
-        const baseHhi = hhi ^ Z_HI[idx*12];
-        let ps = 0;
-        for (let si=0; si<CFG.SPAWN_LEVELS.length; si++) {
-          const lv = CFG.SPAWN_LEVELS[si];
-          const wt = probs[si];
-          b[idx] = lv;
-          const nhlo = baseHlo ^ Z_LO[idx*12 + lv];
-          const nhhi = baseHhi ^ Z_HI[idx*12 + lv];
-          const s = depth<=1 ? evaluate(b) : expectimax(b, depth-1, true, nhlo, nhhi);
-          ps += wt * s;
+    while (i < tiles.length) {
+        if (i + 1 < tiles.length && tiles[i] === tiles[i + 1]) {
+            const newVal = tiles[i] + 1;
+            if (newVal === 11) spirit = true;
+            else merged.push(newVal);
+            merges++;
+            i += 2;
+        } else {
+            merged.push(tiles[i]);
+            i++;
         }
-        b[idx] = 0;
-        score += posW * ps;
-      }
     }
-  }
-  ttStore(klo, khi, score, depth);
-  return score;
+    while (merged.length < 4) merged.push(0);
+    return [merged[0], merged[1], merged[2], merged[3], merges, spirit];
 }
 
-// IDS (Iterative Deepening Search)
-function runIDS(board, budgetMs) {
-  deadline = Date.now() + budgetMs;
-  const safe = deadline - 150;
-  let bestDir=-1, bestScore=-Infinity, reachedDepth=0;
-  const scores = {};
-  const ordDirs = [0,1,2,3];
+// Apply move in given direction (0:left, 1:right, 2:up, 3:down)
+// Returns [newBoard, changed, mergeCount, spiritAppeared]
+function applyMove(board, dir) {
+    const nb = copyBoard(board);
+    let changed = false;
+    let totalMerges = 0;
+    let spiritAny = false;
 
-  for (let depth=1; Date.now()<safe; depth++) {
-    let iterBest=-1, iterScore=-Infinity, timedOut=false;
-    const iterScores = {};
-    for (const dir of ordDirs) {
-      if (Date.now() >= safe) { timedOut=true; break; }
-      const nb = board.slice();
-      if (!applyDir(nb, dir).changed) continue;
-      let nhlo=0, nhhi=0;
-      for (let i=0; i<16; i++) {
-        const k = i*12 + nb[i]; nhlo ^= Z_LO[k]; nhhi ^= Z_HI[k];
-      }
-      const s = expectimax(nb, depth, false, nhlo, nhhi);
-      iterScores[dir] = s;
-      if (s > iterScore) { iterScore = s; iterBest = dir; }
+    if (dir === 0) { // left
+        for (let r = 0; r < 4; r++) {
+            const idx = r * 4;
+            const [v0, v1, v2, v3, m, sp] = processLine(nb[idx], nb[idx+1], nb[idx+2], nb[idx+3]);
+            if (nb[idx] !== v0 || nb[idx+1] !== v1 || nb[idx+2] !== v2 || nb[idx+3] !== v3) changed = true;
+            nb[idx] = v0; nb[idx+1] = v1; nb[idx+2] = v2; nb[idx+3] = v3;
+            totalMerges += m;
+            if (sp) spiritAny = true;
+        }
+    } else if (dir === 1) { // right
+        for (let r = 0; r < 4; r++) {
+            const idx = r * 4;
+            const [v0, v1, v2, v3, m, sp] = processLine(nb[idx+3], nb[idx+2], nb[idx+1], nb[idx]);
+            if (nb[idx] !== v3 || nb[idx+1] !== v2 || nb[idx+2] !== v1 || nb[idx+3] !== v0) changed = true;
+            nb[idx] = v3; nb[idx+1] = v2; nb[idx+2] = v1; nb[idx+3] = v0;
+            totalMerges += m;
+            if (sp) spiritAny = true;
+        }
+    } else if (dir === 2) { // up
+        for (let c = 0; c < 4; c++) {
+            const [v0, v1, v2, v3, m, sp] = processLine(nb[c], nb[4+c], nb[8+c], nb[12+c]);
+            if (nb[c] !== v0 || nb[4+c] !== v1 || nb[8+c] !== v2 || nb[12+c] !== v3) changed = true;
+            nb[c] = v0; nb[4+c] = v1; nb[8+c] = v2; nb[12+c] = v3;
+            totalMerges += m;
+            if (sp) spiritAny = true;
+        }
+    } else { // down
+        for (let c = 0; c < 4; c++) {
+            const [v0, v1, v2, v3, m, sp] = processLine(nb[12+c], nb[8+c], nb[4+c], nb[c]);
+            if (nb[c] !== v3 || nb[4+c] !== v2 || nb[8+c] !== v1 || nb[12+c] !== v0) changed = true;
+            nb[c] = v3; nb[4+c] = v2; nb[8+c] = v1; nb[12+c] = v0;
+            totalMerges += m;
+            if (sp) spiritAny = true;
+        }
     }
-    if (!timedOut && iterBest !== -1) {
-      bestDir = iterBest; bestScore = iterScore; reachedDepth = depth;
-      for (const [d,s] of Object.entries(iterScores)) scores[DIR_NAMES[+d]] = s;
-      const ix = ordDirs.indexOf(iterBest);
-      if (ix>0) { ordDirs.splice(ix,1); ordDirs.unshift(iterBest); }
-    } else break;
-  }
-  return { bestDir, bestScore, scores, reachedDepth };
+
+    // Remove spirits immediately (level 11 -> 0)
+    for (let i = 0; i < 16; i++) {
+        if (nb[i] === 11) {
+            nb[i] = 0;
+            spiritAny = true;
+            changed = true;
+        }
+    }
+
+    return [nb, changed, totalMerges, spiritAny];
 }
 
-// Monte Carlo rollouts
-const MC_BUF = new Uint8Array(16);
-const MC_EMPTY = new Uint8Array(16);
-function mcRollout(startBoard) {
-  MC_BUF.set(startBoard);
-  let maxTile = 0;
-  for (let i=0; i<16; i++) if (MC_BUF[i] > maxTile) maxTile = MC_BUF[i];
-  for (let step=0; step<CFG.MC_MAX_STEPS; step++) {
-    let ne=0;
-    for (let i=0; i<16; i++) if (MC_BUF[i]===0) MC_EMPTY[ne++] = i;
-    if (ne===0) break;
-    const sd = (Math.random()*4)|0;
-    let moved = false;
-    for (let di=0; di<4; di++) {
-      const dir = (sd+di) & 3;
-      if (canMove(MC_BUF, dir)) {
-        applyDir(MC_BUF, dir);
-        moved = true; break;
-      }
+// Precomputed snake order weights for evaluation
+const SNAKE_ORDERS = [
+    [15,14,13,12,8,9,10,11,7,6,5,4,0,1,2,3],
+    [12,13,14,15,11,10,9,8,4,5,6,7,3,2,1,0],
+    [0,1,2,3,7,6,5,4,8,9,10,11,15,14,13,12],
+    [3,2,1,0,4,5,6,7,11,10,9,8,12,13,14,15]
+];
+
+// دالة لحساب احتمالات spawn بناءً على أكبر رقم في اللوحة
+function getSpawnProbs(maxTile) {
+    // الاحتمالات الأساسية (عندما maxTile صغير)
+    let probs = [0.35, 0.25, 0.20, 0.12, 0.08]; // للمستويات 1-5
+
+    if (maxTile >= 10) {
+        // عند وجود 10 أو أكثر: توزيع متوازن تقريباً
+        probs = [0.20, 0.20, 0.20, 0.20, 0.20];
+    } else if (maxTile >= 8) {
+        // 8 أو 9: تحول نحو الأرقام الأكبر
+        probs = [0.15, 0.20, 0.25, 0.25, 0.15];
+    } else if (maxTile >= 6) {
+        // 6 أو 7: الأرقام المتوسطة أكثر شيوعاً
+        probs = [0.20, 0.25, 0.25, 0.20, 0.10];
+    } else if (maxTile >= 4) {
+        // 4 أو 5: 1 و2 ما زالا مسيطرين
+        probs = [0.35, 0.30, 0.20, 0.10, 0.05];
+    } else {
+        // maxTile ≤ 3: 1 هو الأكثر شيوعاً
+        probs = [0.50, 0.25, 0.15, 0.07, 0.03];
     }
-    if (!moved) break;
-    maxTile = 0;
-    for (let i=0; i<16; i++) if (MC_BUF[i] > maxTile) maxTile = MC_BUF[i];
-    ne=0;
-    for (let i=0; i<16; i++) if (MC_BUF[i]===0) MC_EMPTY[ne++] = i;
-    if (ne===0) break;
-    MC_BUF[MC_EMPTY[(Math.random()*ne)|0]] = randomSpawnLevel(maxTile);
-  }
-  return evaluate(MC_BUF);
+    return probs;
 }
 
-function runMC(board, validDirs, budgetMs, targetSims) {
-  const t0 = Date.now(), n = validDirs.length;
-  if (!n) return { wins:{}, rolls:{}, total:0 };
-  const postB = validDirs.map(d => {
-    const b = board.slice(); return applyDir(b, d).changed ? b : null;
-  });
-  const rolls = new Array(n).fill(0);
-  const wins = new Array(n).fill(0);
-  let total = 0;
-  while (Date.now()-t0 < budgetMs && total < targetSims) {
-    for (let di=0; di<n; di++) {
-      if (!postB[di]) continue;
-      wins[di] += mcRollout(postB[di]);
-      rolls[di]++; total++;
+// دالة spawn عشوائي تعتمد على اللوحة (تحسب maxTile داخلياً)
+function randomSpawn(board) {
+    // حساب أكبر رقم في اللوحة
+    let maxTile = 0;
+    for (let i = 0; i < 16; i++) {
+        if (board[i] > maxTile) maxTile = board[i];
     }
-  }
-  const winsMap={}, rollsMap={};
-  for (let di=0; di<n; di++) {
-    const d = DIR_NAMES[validDirs[di]];
-    winsMap[d] = rolls[di] ? wins[di]/rolls[di] : 0;
-    rollsMap[d] = rolls[di];
-  }
-  return { wins: winsMap, rolls: rollsMap, total };
+    const probs = getSpawnProbs(maxTile);
+    const r = Math.random();
+    let cum = 0;
+    for (let i = 0; i < SPAWN_LEVELS.length; i++) {
+        cum += probs[i];
+        if (r < cum) return SPAWN_LEVELS[i];
+    }
+    return 1; // fallback
 }
 
-// نقطة الدخول الرئيسية للـ Worker
+// Heuristic evaluation of a board
+function evaluate(board) {
+    const empty = emptyCount(board);
+    if (empty === 0 && !canMerge(board)) return -100000; // losing
+
+    let score = 0;
+    score += empty * 2700;
+
+    // Snake weighting (best order)
+    let bestSnake = -Infinity;
+    for (const order of SNAKE_ORDERS) {
+        let s = 0;
+        for (let i = 0; i < 16; i++) s += board[i] * order[i];
+        bestSnake = Math.max(bestSnake, s);
+    }
+    score += bestSnake * 10;
+
+    // Adjacency bonuses
+    let adj = 0;
+    for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+            const v = board[r*4 + c];
+            if (v === 0) continue;
+            if (c+1 < 4 && board[r*4 + c+1] === v) adj += v * 15;
+            if (r+1 < 4 && board[(r+1)*4 + c] === v) adj += v * 15;
+            if (c+1 < 4 && board[r*4 + c+1] > 0 && Math.abs(board[r*4 + c+1] - v) === 1) adj += v * 5;
+            if (r+1 < 4 && board[(r+1)*4 + c] > 0 && Math.abs(board[(r+1)*4 + c] - v) === 1) adj += v * 5;
+        }
+    }
+    score += adj;
+
+    // Extra for level 10 pairs
+    for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+            if (board[r*4 + c] === 10) {
+                if (c+1 < 4 && board[r*4 + c+1] === 10) score += 5000;
+                if (r+1 < 4 && board[(r+1)*4 + c] === 10) score += 5000;
+            }
+        }
+    }
+
+    // Monotonicity
+    let mono = 0;
+    for (let r = 0; r < 4; r++) {
+        let inc = 0, dec = 0;
+        for (let c = 0; c < 3; c++) {
+            const cur = board[r*4 + c];
+            const nxt = board[r*4 + c+1];
+            if (cur > nxt) dec += cur - nxt;
+            else inc += nxt - cur;
+        }
+        mono += Math.max(inc, dec);
+    }
+    for (let c = 0; c < 4; c++) {
+        let inc = 0, dec = 0;
+        for (let r = 0; r < 3; r++) {
+            const cur = board[r*4 + c];
+            const nxt = board[(r+1)*4 + c];
+            if (cur > nxt) dec += cur - nxt;
+            else inc += nxt - cur;
+        }
+        mono += Math.max(inc, dec);
+    }
+    score += mono * 50;
+
+    // Smoothness penalty
+    let smooth = 0;
+    for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+            const v = board[r*4 + c];
+            if (v === 0) continue;
+            if (c+1 < 4 && board[r*4 + c+1] > 0) smooth -= Math.abs(v - board[r*4 + c+1]);
+            if (r+1 < 4 && board[(r+1)*4 + c] > 0) smooth -= Math.abs(v - board[(r+1)*4 + c]);
+        }
+    }
+    score += smooth * 30;
+
+    // Corner bonus for largest tile
+    let maxVal = 0, maxPos = -1;
+    for (let i = 0; i < 16; i++) {
+        if (board[i] > maxVal) {
+            maxVal = board[i];
+            maxPos = i;
+        }
+    }
+    if ([0,3,12,15].includes(maxPos)) score += maxVal * 100;
+
+    return score;
+}
+
+// Check if any merge is possible (for game over)
+function canMerge(board) {
+    for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+            const v = board[r*4 + c];
+            if (v === 0) return true;
+            if (c+1 < 4 && board[r*4 + c+1] === v) return true;
+            if (r+1 < 4 && board[(r+1)*4 + c] === v) return true;
+        }
+    }
+    return false;
+}
+
+// Expectimax search with transposition table – الآن تستخدم spawn ديناميكي
+function expectimax(board, depth, isChance) {
+    if (depth === 0) return evaluate(board);
+
+    const key = hash(board) + "_" + depth + "_" + isChance;
+    const cached = ttGet(key, depth);
+    if (cached !== null) return cached;
+
+    if (isChance) {
+        // MAX node (player move)
+        let best = -Infinity;
+        for (let d = 0; d < 4; d++) {
+            const [nb, changed] = applyMove(board, d);
+            if (!changed) continue;
+            const val = expectimax(nb, depth - 1, false);
+            if (val > best) best = val;
+        }
+        if (best === -Infinity) best = evaluate(board) - 50000; // no moves
+        ttSet(key, depth, best);
+        return best;
+    } else {
+        // CHANCE node (spawn) – استخدام spawn ديناميكي
+        const empty = emptyCells(board);
+        if (empty.length === 0) return evaluate(board);
+
+        // حساب maxTile للوحة الحالية لتحديد الاحتمالات
+        let maxTile = 0;
+        for (let i = 0; i < 16; i++) if (board[i] > maxTile) maxTile = board[i];
+        const dynamicProbs = getSpawnProbs(maxTile);
+
+        // Sample up to 4 random empty cells for efficiency
+        const sample = empty.length <= 4 ? empty : shuffle(empty).slice(0, 4);
+        let total = 0;
+        let weightSum = 0;
+        for (const pos of sample) {
+            for (let i = 0; i < SPAWN_LEVELS.length; i++) {
+                const lev = SPAWN_LEVELS[i];
+                const prob = dynamicProbs[i];
+                const nb = copyBoard(board);
+                nb[pos] = lev;
+                const val = expectimax(nb, depth - 1, true);
+                total += val * prob;
+                weightSum += prob;
+            }
+        }
+        const result = weightSum > 0 ? total / weightSum : evaluate(board);
+        ttSet(key, depth, result);
+        return result;
+    }
+}
+
+// Fisher-Yates shuffle
+function shuffle(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
+
+// Monte Carlo simulation (rollout) for survival estimate – تستخدم randomSpawn(board)
+function monteCarloRollout(board, steps) {
+    let b = copyBoard(board);
+    for (let step = 0; step < steps; step++) {
+        const moves = [];
+        for (let d = 0; d < 4; d++) {
+            const [nb, changed] = applyMove(b, d);
+            if (changed) moves.push(nb);
+        }
+        if (moves.length === 0) return step; // dead
+        b = moves[Math.floor(Math.random() * moves.length)];
+        const empty = emptyCells(b);
+        if (empty.length > 0) {
+            b[empty[Math.floor(Math.random() * empty.length)]] = randomSpawn(b);
+        }
+    }
+    return steps; // survived
+}
+
+// Main analysis function: returns best move and confidence
+function analyze(board) {
+    const empty = emptyCount(board);
+    let depth, sims, maxSteps;
+    if (empty <= 3) {
+        depth = 6;
+        sims = 800;
+        maxSteps = 40;
+    } else if (empty <= 6) {
+        depth = 5;
+        sims = 400;
+        maxSteps = 30;
+    } else {
+        depth = 4;
+        sims = 200;
+        maxSteps = 25;
+    }
+
+    TT.clear(); // fresh TT per analysis
+
+    const candidates = [];
+    for (let d = 0; d < 4; d++) {
+        const [nb, changed] = applyMove(board, d);
+        if (!changed) {
+            candidates.push({ dir: DIRS[d], expect: -Infinity, mono: 0, valid: false });
+            continue;
+        }
+        const expectScore = expectimax(nb, depth, false);
+
+        // Monte Carlo survival estimate – استخدام randomSpawn(nb) بدلاً من الثابت
+        let totalSteps = 0;
+        for (let s = 0; s < sims; s++) {
+            const simBoard = copyBoard(nb);
+            const emptyNow = emptyCells(simBoard);
+            if (emptyNow.length > 0) {
+                simBoard[emptyNow[Math.floor(Math.random() * emptyNow.length)]] = randomSpawn(simBoard);
+            }
+            totalSteps += monteCarloRollout(simBoard, maxSteps);
+        }
+        const avgSteps = totalSteps / sims;
+
+        // Combined score (weighted)
+        const combined = expectScore * 0.6 + avgSteps * 400 * 0.4;
+
+        candidates.push({
+            dir: DIRS[d],
+            expect: expectScore,
+            mono: avgSteps,
+            combined,
+            valid: true
+        });
+    }
+
+    // Select best move
+    let bestIdx = -1;
+    let bestScore = -Infinity;
+    for (let i = 0; i < candidates.length; i++) {
+        if (candidates[i].valid && candidates[i].combined > bestScore) {
+            bestScore = candidates[i].combined;
+            bestIdx = i;
+        }
+    }
+
+    // Compute confidence
+    let confidence = 0;
+    if (bestIdx >= 0) {
+        const validCandidates = candidates.filter(c => c.valid);
+        if (validCandidates.length > 1) {
+            const scores = validCandidates.map(c => c.combined).sort((a,b) => b - a);
+            const gap = scores[0] - scores[1];
+            const maxAbs = Math.abs(scores[0]) || 1;
+            confidence = 40 + (gap / maxAbs) * 50 + (candidates[bestIdx].mono / maxSteps) * 30;
+            confidence = Math.min(95, Math.max(10, confidence));
+        } else {
+            confidence = 50;
+        }
+        confidence = Math.min(99, confidence + empty * 2);
+    }
+
+    return {
+        bestMove: bestIdx >= 0 ? DIRS[bestIdx] : "none",
+        confidence: Math.round(confidence)
+    };
+}
+
+// Worker message handler – expects { type, board } and returns { direction, confidence }
 self.onmessage = function(e) {
-  const boardArr = e.data.board;
-  const board = new Uint8Array(boardArr);
-  const emptyCount = board.filter(v=>v===0).length;
-  const maxTile = board.reduce((m,v)=>v>m?v:m,0);
-
-  // تحقق من الفوز الفوري (إنشاء 11)
-  for (let d=0; d<4; d++) {
-    const nb = board.slice();
-    const {changed, created} = applyDir(nb, d);
-    if (changed && created) {
-      self.postMessage({ direction: DIR_NAMES[d], confidence: 100 });
-      return;
+    const { type, board } = e.data;
+    if (type === "analyze") {
+        try {
+            const result = analyze(board);
+            self.postMessage({
+                direction: result.bestMove,
+                confidence: result.confidence
+            });
+        } catch (err) {
+            self.postMessage({
+                direction: null,
+                confidence: 0
+            });
+        }
     }
-  }
-
-  const isEndgame = emptyCount <= CFG.ENDGAME_EMPTY;
-  const egBonus = maxTile>=9 ? 1500 : maxTile>=8 ? 700 : 0;
-  const baseTime = emptyCount>10 ? 600 : emptyCount>7 ? 1200 : emptyCount>4 ? 2500 : emptyCount>2 ? 4000 : 6000;
-  const totalMs = baseTime + egBonus;
-  const idsFrac = isEndgame ? 0.25 : 0.60;
-  const idsBudget = Math.floor(totalMs * idsFrac);
-  const mcBudget = totalMs - idsBudget;
-  const mcTarget = isEndgame ? 180000 : 25000;
-
-  ttClear();
-  const ids = runIDS(board, idsBudget);
-
-  const validDirs = [0,1,2,3].filter(d => { const nb=board.slice(); return applyDir(nb, d).changed; });
-  const mc = runMC(board, validDirs, mcBudget, mcTarget);
-
-  let bestDir = ids.bestDir !== -1 ? DIR_NAMES[ids.bestDir] : null;
-  if (isEndgame && mc.total >= 200 && bestDir) {
-    let mcBest = bestDir, mcBestW = mc.wins[bestDir] ?? 0;
-    for (const d of DIR_NAMES) {
-      const w = mc.wins[d] ?? -1;
-      if (w > mcBestW) { mcBestW = w; mcBest = d; }
-    }
-    if (mcBest !== bestDir && mcBestW > (mc.wins[bestDir]??0)*1.15) bestDir = mcBest;
-  }
-  if (!bestDir) {
-    for (let d=0; d<4; d++) {
-      const nb = board.slice();
-      if (applyDir(nb, d).changed) { bestDir = DIR_NAMES[d]; break; }
-    }
-  }
-
-  let confidence = 50;
-  const vals = Object.values(ids.scores).filter(v=>isFinite(v));
-  if (vals.length > 1) {
-    const mx = Math.max(...vals), mn = Math.min(...vals);
-    const bs = ids.scores[bestDir] ?? mn;
-    if (mx > mn) confidence = Math.round(((bs - mn) / (mx - mn)) * 75 + 25);
-  } else if (vals.length === 1) confidence = 90;
-
-  self.postMessage({ direction: bestDir, confidence });
 };
 `;
 
-/* ----------------------------------------------------------------
-   حالة اللعبة و DOM
-   ---------------------------------------------------------------- */
+/* ================================================================
+   GAME STATE
+   ================================================================ */
 const state = {
-  board: new Array(16).fill(0),
-  mode: 'idle', // 'idle' | 'spawn' | 'edit'
-  isEditMode: false,
-  spawnTile: -1,
-  editTile: -1,
-  worker: null,
-  aiResult: null,
-  aiRunning: false
+    board: new Array(16).fill(0),
+    mode: 'idle', // 'idle' | 'spawn' | 'edit'
+    isEditMode: false,
+    spawnTile: -1,
+    editTile: -1,
+    pendingDir: null,
+    worker: null,
+    aiResult: null,
+    aiRunning: false,
+    history: [],   // لتخزين الحالات السابقة (undo)
 };
 
-// دوال الترجمة (مختصرة)
-const _T_AR = {
-  ready: 'جاهز – اضغط تحليل أو قم بحركة',
-  aiThinking: 'استشارة العراف…',
-  aiError: 'خطأ في العراف',
-  waitSpawn: 'في انتظار وضع الوحش…',
-  modeSpawn: '⚡ وضع الإنبات – انقر على خلية فارغة لوضع وحش',
-  boardLocked: '⚔ اللوحة مغلقة – لا توجد حركات متبقية!',
-  boardLocked2: '⚔ اللوحة مغلقة – لا توجد حركات!',
-  clearConfirm: 'هل تريد مسح اللوحة؟',
-  boardCleared: 'تم مسح اللوحة',
-  modeEdit: '✎ وضع التعديل – انقر على أي بلاطة',
-  survival: 'البقاء: {c}٪',
-  bestMove: 'أفضل حركة: {a}  (ثقة {c}٪)',
-  noMove: 'لا توجد حركة صالحة',
-};
-function t(key) { return _T_AR[key] ?? key; }
+const MAX_HISTORY = 10; // عدد أقصى للتراجع
 
-// تهيئة الـ Worker
-function initWorker() {
-  try {
-    const blob = new Blob([WORKER_SOURCE], { type: 'application/javascript' });
-    const url = URL.createObjectURL(blob);
-    state.worker = new Worker(url);
-    state.worker.onmessage = handleWorkerMessage;
-    state.worker.onerror = (e) => {
-      console.error('Worker error:', e);
-      state.aiRunning = false;
-      setAIStatus(t('aiError'));
+// دالة لحفظ الحالة الحالية في التاريخ
+function pushHistory() {
+    const snapshot = {
+        board: state.board.slice(),
+        mode: state.mode,
+        isEditMode: state.isEditMode,
+        aiResult: state.aiResult ? { ...state.aiResult } : null,
     };
-  } catch (err) {
-    console.warn('Web Worker unavailable:', err);
-  }
+    state.history.push(snapshot);
+    if (state.history.length > MAX_HISTORY) state.history.shift();
+}
+
+// دالة للتراجع إلى آخر حالة
+function undo() {
+    if (state.history.length === 0) return;
+    const prev = state.history.pop();
+    state.board = prev.board.slice();
+    state.mode = prev.mode;
+    state.isEditMode = prev.isEditMode;
+    state.aiResult = prev.aiResult;
+    state.aiRunning = false; // إيقاف أي تحليل جارٍ
+    renderBoard();
+    setModeBar(state.isEditMode ? '✎ وضع التعديل – انقر على أي بلاطة لتحديد مستواها' : '');
+    if (state.mode === 'spawn') {
+        setAIStatus('في انتظار وضع الوحش…');
+        setModeBar('⚡ وضع الإنبات – انقر على أي خلية فارغة لوضع وحش');
+    } else {
+        requestSolve(); // إعادة التحليل بعد التراجع
+    }
+}
+
+/* ================================================================
+   WORKER MANAGEMENT
+   ================================================================ */
+function initWorker() {
+    try {
+        const blob = new Blob([WORKER_SOURCE], {
+            type: 'application/javascript'
+        });
+        const url = URL.createObjectURL(blob);
+        state.worker = new Worker(url);
+        state.worker.onmessage = handleWorkerMessage;
+        state.worker.onerror = (e) => {
+            console.error("AI worker crashed", e);
+            state.aiRunning = false;
+            setAIStatus("إعادة تشغيل...");
+            try {
+                state.worker.terminate();
+            } catch { }
+            initWorker();
+        };
+    } catch (err) {
+        console.warn('Web Worker unavailable:', err);
+    }
 }
 
 function requestSolve() {
-  if (!state.worker || state.aiRunning) return;
-  state.aiRunning = true;
-  setAIStatus(t('aiThinking'));
-  setAIArrow('⟳', false);
-  state.worker.postMessage({ board: state.board.slice() });
+    if (!state.worker) {
+        initWorker();
+    }
+    if (state.aiRunning) return;
+    state.aiRunning = true;
+    setAIStatus('Wait a second…');
+    state.worker.postMessage({
+        type: "analyze",
+        board: state.board.slice()
+    });
 }
 
 function handleWorkerMessage(e) {
-  state.aiRunning = false;
-  state.aiResult = e.data;
-  renderAIPanel(e.data);
+    state.aiRunning = false;
+    state.aiResult = e.data;
+    renderAIPanel(e.data);
 }
 
-// تطبيق حركة المستخدم
+/* ================================================================
+   MOVE HANDLER
+   ================================================================ */
 function handleMove(direction) {
-  if (state.mode !== 'idle') return;
-  const { board, changed, level11Count } = applyMove(state.board, direction);
-  if (!changed) return;
-  state.board = board;
-  if (level11Count > 0) showMergeBanner();
-  const empties = state.board.map((v,i)=>v===0?i:-1).filter(i=>i>=0);
-  if (empties.length > 0) {
-    state.mode = 'spawn';
-    state.aiResult = null;
-    setAIArrow('…', false);
-    setAIStatus(t('waitSpawn'));
-    setModeBar(t('modeSpawn'));
-  } else {
-    if (isGameOver(state.board)) setTimeout(() => alert(t('boardLocked')), 80);
-    else requestSolve();
-  }
-  renderBoard();
-}
+    if (state.mode !== 'idle') return;
 
-// النقر على بلاطة
-function handleTileClick(index) {
-  if (state.mode === 'spawn') {
-    if (state.board[index] !== 0) return;
-    state.spawnTile = index;
-    openModal('spawn');
-  } else if (state.isEditMode) {
-    state.editTile = index;
-    openModal('edit');
-  }
-}
+    // حفظ الحالة قبل الحركة (للتراجع)
+    pushHistory();
 
-// تأكيد spawn
-function confirmSpawn(level) {
-  closeModal('spawn');
-  if (state.spawnTile < 0) return;
-  state.board[state.spawnTile] = level;
-  state.spawnTile = -1;
-  state.mode = 'idle';
-  setModeBar('');
-  renderBoard();
-  if (isGameOver(state.board)) setTimeout(() => alert(t('boardLocked2')), 80);
-  else requestSolve();
-}
-function cancelSpawn() { closeModal('spawn'); }
-
-// تأكيد تعديل
-function confirmEdit(level) {
-  closeModal('edit');
-  if (state.editTile < 0) return;
-  if (level === 11) {
-    showMergeBanner();
-    state.board[state.editTile] = 0;
-  } else {
-    state.board[state.editTile] = level;
-  }
-  state.editTile = -1;
-  renderBoard();
-  requestSolve();
-}
-function cancelEdit() { closeModal('edit'); }
-
-// مسح اللوحة
-function clearBoard() {
-  if (!confirm(t('clearConfirm'))) return;
-  state.board.fill(0);
-  state.mode = 'idle';
-  state.aiResult = null;
-  setModeBar('');
-  renderBoard();
-  setAIArrow('?', false);
-  setAIStatus(t('boardCleared'));
-}
-function randomBoard() {
-  state.board = generateRandomBoard();
-  state.mode = 'idle';
-  setModeBar('');
-  renderBoard();
-  requestSolve();
-}
-function toggleEditMode() {
-  state.isEditMode = !state.isEditMode;
-  document.getElementById('btn-edit-mode')?.classList.toggle('active', state.isEditMode);
-  if (state.isEditMode) {
-    state.mode = 'idle';
-    setModeBar(t('modeEdit'));
-  } else {
-    setModeBar('');
-  }
-  renderBoard();
-}
-
-// عرض اللوحة
-function renderBoard() {
-  const boardEl = document.getElementById('board');
-  if (!boardEl) return;
-  for (let i=0; i<16; i++) {
-    const tile = boardEl.children[i];
-    const val = state.board[i];
-    tile.dataset.level = val;
-    tile.classList.remove('spawn-target','edit-highlight');
-    const img = tile.querySelector('.tile-img');
-    if (val > 0 && val <= 11) {
-      const animal = ANIMALS[val];
-      img.src = animal.img;
-      img.alt = animal.name;
-      img.style.display = '';
-      tile.querySelector('.tile-num').textContent = val;
-    } else {
-      img.src = '';
-      img.alt = '';
-      img.style.display = 'none';
-      tile.querySelector('.tile-num').textContent = '';
+    const {
+        board,
+        changed,
+        level11Count
+    } = applyMove(state.board, direction);
+    if (!changed) {
+        // إذا لم تتغير اللوحة، نزيل الحالة المحفوظة (لأنه لا يوجد تغيير)
+        state.history.pop();
+        return;
     }
-    if (state.mode === 'spawn' && val === 0) tile.classList.add('spawn-target');
-    if (state.isEditMode) tile.classList.add('edit-highlight');
-  }
-  highlightSuggestedBtn();
+
+    state.board = board;
+    if (level11Count > 0) showMergeBanner();
+
+    const empties = state.board.map((v, i) => (v === 0 ? i : -1)).filter(i => i >= 0);
+
+    if (empties.length > 0) {
+        state.mode = 'spawn';
+        state.aiResult = null;
+        setAIArrow('…', false);
+        setAIStatus('في انتظار وضع الوحش…');
+        setModeBar('⚡ وضع الإنبات – انقر على أي خلية فارغة لوضع وحش');
+        renderBoard();
+    } else {
+        // لا توجد خلايا فارغة بعد الحركة
+        renderBoard();
+        if (isGameOver(state.board)) {
+            setTimeout(() => alert('⚔ اللوحة مغلقة – لا توجد حركات متبقية! استخدم وضع التعديل.'), 80);
+        } else {
+            requestSolve();
+        }
+    }
+}
+
+/* ================================================================
+   TILE CLICK HANDLER
+   ================================================================ */
+function handleTileClick(index) {
+    if (state.mode === 'spawn') {
+        if (state.board[index] !== 0) return; // must click empty tile
+        state.spawnTile = index;
+        openModal('spawn');
+    } else if (state.isEditMode) {
+        state.editTile = index;
+        openModal('edit');
+    }
+}
+
+/* ================================================================
+   SPAWN / EDIT SELECTION
+   ================================================================ */
+function confirmSpawn(level) {
+    closeModal('spawn');
+    if (state.spawnTile < 0) return;
+
+    // حفظ الحالة قبل spawn (للتراجع)
+    pushHistory();
+
+    state.board[state.spawnTile] = level;
+    state.spawnTile = -1;
+    state.mode = 'idle';
+    setModeBar('');
+    renderBoard();
+    if (isGameOver(state.board)) {
+        setTimeout(() => alert('⚔ اللوحة مغلقة – لا توجد حركات! رتّب البلاطات للمتابعة.'), 80);
+    } else {
+        requestSolve();
+    }
+}
+
+function cancelSpawn() {
+    closeModal('spawn');
+    // Stay in spawn mode – player must still place a tile
+}
+
+function confirmEdit(level) {
+    closeModal('edit');
+    if (state.editTile < 0) return;
+
+    // حفظ الحالة قبل التعديل
+    pushHistory();
+
+    if (level === 11) {
+        // Placing a level-11 tile triggers immediate ascension (becomes empty)
+        showMergeBanner();
+        state.board[state.editTile] = 0;
+    } else {
+        state.board[state.editTile] = level;
+    }
+    state.editTile = -1;
+    renderBoard();
+    requestSolve();
+}
+
+function cancelEdit() {
+    closeModal('edit');
+    state.editTile = -1;
+}
+
+/* ================================================================
+   BOARD MANAGEMENT
+   ================================================================ */
+function clearBoard() {
+    if (!confirm('هل تريد مسح اللوحة والبداية من جديد؟')) return;
+    // حفظ الحالة الفارغة الجديدة كبداية
+    pushHistory();
+    state.board.fill(0);
+    state.mode = 'idle';
+    state.aiResult = null;
+    setModeBar('');
+    clearSavedGame();
+    renderBoard();
+    setAIArrow('?', false);
+    setAIStatus('تم مسح اللوحة – جاهز للعبة جديدة');
+}
+
+function randomBoard() {
+    // حفظ الحالة الحالية قبل التبديل
+    pushHistory();
+    state.board = generateRandomBoard();
+    state.mode = 'idle';
+    setModeBar('');
+    renderBoard();
+    requestSolve();
+}
+
+function toggleEditMode() {
+    state.isEditMode = !state.isEditMode;
+    document.getElementById('btn-edit-mode').classList.toggle('active', state.isEditMode);
+    if (state.isEditMode) {
+        state.mode = 'idle';
+        setModeBar('✎ وضع التعديل – انقر على أي بلاطة لتحديد مستواها');
+    } else {
+        setModeBar('');
+    }
+    renderBoard();
+}
+
+/* ================================================================
+   RENDERING
+   ================================================================ */
+function renderBoard() {
+    const boardEl = document.getElementById('board');
+    for (let i = 0; i < 16; i++) {
+        const tile = boardEl.children[i];
+        const val = state.board[i];
+        tile.dataset.level = val;
+
+        // Clear classes
+        tile.classList.remove('spawn-target', 'edit-highlight');
+
+        const img = tile.querySelector('.tile-img');
+        if (val > 0 && val <= 11) {
+            const animal = ANIMALS[val];
+            img.src = animal.img;
+            img.alt = animal.name;
+            img.style.display = '';
+            tile.title = animal.name + ' (مستوى ' + val + ')';
+            tile.querySelector('.tile-name').textContent = animal.name;
+            tile.querySelector('.tile-num').textContent = val;
+        } else {
+            img.src = '';
+            img.alt = '';
+            img.style.display = 'none';
+            tile.title = '';
+            tile.querySelector('.tile-name').textContent = '';
+            tile.querySelector('.tile-num').textContent = '';
+        }
+
+        // Spawn-mode: highlight empty tiles
+        if (state.mode === 'spawn' && val === 0) tile.classList.add('spawn-target');
+
+        // Edit-mode: highlight all tiles
+        if (state.isEditMode) tile.classList.add('edit-highlight');
+    }
+
+    // Highlight suggested direction button
+    highlightSuggestedBtn();
+
+    // Auto-save after every visual update
+    saveGameState();
 }
 
 function highlightSuggestedBtn() {
-  document.querySelectorAll('.dir-btn').forEach(b=>b.classList.remove('suggested'));
-  if (state.aiResult && state.aiResult.direction) {
-    const btn = document.querySelector(`.dir-btn[data-dir="${state.aiResult.direction}"]`);
-    if (btn) btn.classList.add('suggested');
-  }
+    document.querySelectorAll('.dir-btn').forEach(b => b.classList.remove('suggested'));
+    if (state.aiResult && state.aiResult.direction) {
+        const btn = document.querySelector(`.dir-btn[data-dir="${state.aiResult.direction}"]`);
+        if (btn) btn.classList.add('suggested');
+    }
 }
 
 function renderAIPanel(result) {
-  const arrows = { left:'⬅', right:'➡', up:'⬆', down:'⬇' };
-  const arrow = result.direction ? arrows[result.direction] : '✕';
-  setAIArrow(arrow, !!result.direction);
-  const conf = result.confidence || 0;
-  const fill = document.getElementById('confidence-fill');
-  if (fill) fill.style.width = conf + '%';
-  const label = document.getElementById('confidence-label');
-  if (label) label.textContent = t('survival').replace('{c}', conf);
-  setAIStatus(result.direction
-    ? t('bestMove').replace('{a}', arrow).replace('{c}', conf)
-    : t('noMove'));
+    const arrows = {
+        left: '⬅',
+        right: '➡',
+        up: '⬆',
+        down: '⬇'
+    };
+    const arrow = result.direction ? arrows[result.direction] : '✕';
+    setAIArrow(arrow, !!result.direction);
+
+    const conf = result.confidence || 0;
+    const fill = document.getElementById('confidence-fill');
+    fill.style.width = conf + '%';
+    const pos = conf <= 33 ? '0%' : conf <= 66 ? '50%' : '100%';
+    fill.style.backgroundPosition = pos + ' 0';
+
+    document.getElementById('confidence-label').textContent = `Survival: ${conf}٪`;
+    setAIStatus(result.direction ?
+        `أفضل حركة: ${arrow}  (ثقة ${conf}٪)` :
+        'لا توجد حركة صالحة');
+
+    highlightSuggestedBtn();
 }
 
 function setAIArrow(text, hasResult) {
-  const el = document.getElementById('ai-direction');
-  if (el) { el.textContent = text; el.classList.toggle('has-result', hasResult); }
+    const el = document.getElementById('ai-direction');
+    el.textContent = text;
+    el.classList.toggle('has-result', hasResult);
 }
+
 function setAIStatus(text) {
-  const el = document.getElementById('ai-status');
-  if (el) el.textContent = text;
+    document.getElementById('ai-status').textContent = text;
 }
+
 function setModeBar(text) {
-  const el = document.getElementById('mode-bar');
-  if (el) el.textContent = text;
+    document.getElementById('mode-bar').textContent = text;
 }
 
-// النوافذ المنبثقة
+/* ================================================================
+   MODALS
+   ================================================================ */
 function openModal(type) {
-  document.getElementById(type==='spawn'?'spawn-overlay':'edit-overlay')?.classList.remove('hidden');
+    document.getElementById(type === 'spawn' ? 'spawn-overlay' : 'edit-overlay').classList.remove('hidden');
 }
+
 function closeModal(type) {
-  document.getElementById(type==='spawn'?'spawn-overlay':'edit-overlay')?.classList.add('hidden');
+    document.getElementById(type === 'spawn' ? 'spawn-overlay' : 'edit-overlay').classList.add('hidden');
 }
+
 function buildPicker(containerId, levels) {
-  const el = document.getElementById(containerId);
-  if (!el) return;
-  el.innerHTML = '';
-  levels.forEach(lv => {
-    const btn = document.createElement('button');
-    btn.className = 'level-btn';
-    btn.dataset.level = lv;
-    if (lv === 0) {
-      btn.textContent = '✕';
-      btn.title = 'Empty';
-    } else {
-      const animal = ANIMALS[lv];
-      btn.innerHTML = `<img src="${animal.img}" alt="" class="picker-img"><span class="lbnum">${lv}</span>`;
-      btn.style.background = `radial-gradient(circle at 38% 38%, ${lighten(animal.color)}, ${animal.color})`;
-    }
-    el.appendChild(btn);
-  });
+    const el = document.getElementById(containerId);
+    el.innerHTML = '';
+    levels.forEach(lv => {
+        const btn = document.createElement('button');
+        btn.className = 'level-btn';
+        btn.dataset.level = lv;
+
+        if (lv === 0) {
+            btn.textContent = '✕';
+            btn.title = 'Empty';
+        } else {
+            const animal = ANIMALS[lv];
+            btn.innerHTML = `<img src="${animal.img}" alt="${animal.name}" class="picker-img"><span class="lbnum">${lv}</span>`;
+            btn.style.background = `radial-gradient(circle at 38% 38%, ${lighten(animal.color)}, ${animal.color})`;
+            btn.style.boxShadow = `0 0 10px ${animal.color}88`;
+            btn.title = animal.name;
+        }
+        el.appendChild(btn);
+    });
 }
+
 function lighten(hex) {
-  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
-  const mix = (c,t=220)=> Math.round(c + (t-c)*0.45);
-  return `rgb(${mix(r)},${mix(g)},${mix(b)})`;
+    // Simple lighten: blend toward white
+    const r = parseInt(hex.slice(1, 3), 16),
+        g = parseInt(hex.slice(3, 5), 16),
+        b = parseInt(hex.slice(5, 7), 16);
+    const mix = (c, t = 220) => Math.round(c + (t - c) * 0.45);
+    return `rgb(${mix(r)},${mix(g)},${mix(b)})`;
 }
 
+/* ================================================================
+   MERGE BANNER
+   ================================================================ */
 function showMergeBanner() {
-  const banner = document.getElementById('merge-banner');
-  if (!banner) return;
-  banner.classList.add('hidden');
-  void banner.offsetWidth;
-  banner.classList.remove('hidden');
-  clearTimeout(showMergeBanner._timer);
-  showMergeBanner._timer = setTimeout(()=>banner.classList.add('hidden'), 1900);
+    const banner = document.getElementById('merge-banner');
+    // Restart animation by briefly hiding
+    banner.classList.add('hidden');
+    void banner.offsetWidth; // force reflow
+    banner.classList.remove('hidden');
+    clearTimeout(showMergeBanner._timer);
+    showMergeBanner._timer = setTimeout(() => banner.classList.add('hidden'), 1900);
 }
 
-// دعم لوحة المفاتيح
+/* ================================================================
+   KEYBOARD SUPPORT
+   ================================================================ */
 const KEY_MAP = {
-  ArrowLeft:'left', ArrowRight:'right', ArrowUp:'up', ArrowDown:'down',
-  a:'left', d:'right', w:'up', s:'down',
-  A:'left', D:'right', W:'up', S:'down',
+    ArrowLeft: 'left',
+    ArrowRight: 'right',
+    ArrowUp: 'up',
+    ArrowDown: 'down',
+    a: 'left',
+    d: 'right',
+    w: 'up',
+    s: 'down',
+    A: 'left',
+    D: 'right',
+    W: 'up',
+    S: 'down',
 };
 
-// تهيئة DOM اللوحة
+/* ================================================================
+   BOARD DOM INIT
+   ================================================================ */
 function initBoardDOM() {
-  const boardEl = document.getElementById('board');
-  if (!boardEl) return;
-  boardEl.innerHTML = '';
-  for (let i=0; i<16; i++) {
-    const tile = document.createElement('div');
-    tile.className = 'tile';
-    tile.dataset.level = '0';
-    tile.innerHTML = `<img class="tile-img" src="" alt="" draggable="false"><span class="tile-num"></span>`;
-    tile.addEventListener('click', ()=>handleTileClick(i));
-    boardEl.appendChild(tile);
-  }
+    const boardEl = document.getElementById('board');
+    boardEl.innerHTML = '';
+    for (let i = 0; i < 16; i++) {
+        const tile = document.createElement('div');
+        tile.className = 'tile';
+        tile.dataset.level = '0';
+        tile.innerHTML = `<img class="tile-img" src="" alt="" draggable="false" onerror="this.style.display='none'"><span class="tile-name"></span><span class="tile-num"></span>`;
+        tile.addEventListener('click', () => handleTileClick(i));
+        boardEl.appendChild(tile);
+    }
 }
 
-// بدء التشغيل
+/* ================================================================
+   INIT
+   ================================================================ */
 function init() {
-  initBoardDOM();
-  buildPicker('spawn-picker', [1,2,3,4,5]);
-  buildPicker('edit-picker', [0,1,2,3,4,5,6,7,8,9,10,11]);
+    initBoardDOM();
 
-  document.getElementById('spawn-picker')?.addEventListener('click', e => {
-    const btn = e.target.closest('.level-btn');
-    if (btn) confirmSpawn(parseInt(btn.dataset.level));
-  });
-  document.getElementById('edit-picker')?.addEventListener('click', e => {
-    const btn = e.target.closest('.level-btn');
-    if (btn) confirmEdit(parseInt(btn.dataset.level));
-  });
-  document.getElementById('spawn-cancel')?.addEventListener('click', cancelSpawn);
-  document.getElementById('edit-cancel')?.addEventListener('click', cancelEdit);
+    // Spawn levels: 1-5 فقط
+    buildPicker('spawn-picker', [1, 2, 3, 4, 5]);
+    buildPicker('edit-picker', [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 
-  document.querySelectorAll('.dir-btn').forEach(btn => {
-    btn.addEventListener('click', () => handleMove(btn.dataset.dir));
-  });
+    // Spawn picker buttons
+    document.getElementById('spawn-picker').addEventListener('click', e => {
+        const btn = e.target.closest('.level-btn');
+        if (btn) confirmSpawn(parseInt(btn.dataset.level));
+    });
 
-  document.getElementById('btn-edit-mode')?.addEventListener('click', toggleEditMode);
-  document.getElementById('btn-clear')?.addEventListener('click', clearBoard);
-  document.getElementById('btn-random')?.addEventListener('click', randomBoard);
-  document.getElementById('btn-analyze')?.addEventListener('click', requestSolve);
+    // Edit picker buttons
+    document.getElementById('edit-picker').addEventListener('click', e => {
+        const btn = e.target.closest('.level-btn');
+        if (btn) confirmEdit(parseInt(btn.dataset.level));
+    });
 
-  document.addEventListener('keydown', e => {
-    if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key)) e.preventDefault();
-    const dir = KEY_MAP[e.key];
-    if (dir) handleMove(dir);
-  });
+    // Modal cancel buttons
+    document.getElementById('spawn-cancel').addEventListener('click', cancelSpawn);
+    document.getElementById('edit-cancel').addEventListener('click', cancelEdit);
 
-  initWorker();
-  renderBoard();
-  setAIStatus(t('ready'));
+    // Direction buttons
+    document.querySelectorAll('.dir-btn').forEach(btn => {
+        btn.addEventListener('click', () => handleMove(btn.dataset.dir));
+    });
+
+    // Tool buttons
+    document.getElementById('btn-edit-mode').addEventListener('click', toggleEditMode);
+    document.getElementById('btn-clear').addEventListener('click', clearBoard);
+    document.getElementById('btn-random').addEventListener('click', randomBoard);
+    document.getElementById('btn-analyze').addEventListener('click', requestSolve);
+    // زر التراجع (Undo) – يجب إضافته في HTML
+    const undoBtn = document.getElementById('btn-undo');
+    if (undoBtn) undoBtn.addEventListener('click', undo);
+
+    // Keyboard
+    document.addEventListener('keydown', e => {
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
+        const dir = KEY_MAP[e.key];
+        if (dir) handleMove(dir);
+        // Ctrl+Z للتراجع
+        if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+            e.preventDefault();
+            undo();
+        }
+    });
+
+    // Init worker
+    initWorker();
+
+    // Restore saved game (or start fresh)
+    const hadSave = loadGameState();
+
+    // Initial render
+    renderBoard();
+
+    if (!hadSave) {
+        setAIStatus('Ready – Press Analyze or Make a Move');
+    } else if (state.mode === 'idle') {
+        requestSolve(); // auto-analyze restored board
+    }
 }
 
-document.addEventListener('DOMContentLoaded', init);
+/* ================================================================
+   GAME STATE PERSISTENCE  (per-user save/restore)
+   ================================================================ */
+
+function currentUsername() {
+    try {
+        const sess = JSON.parse(localStorage.getItem('bm_session') || 'null');
+        return (sess && sess.username) ? sess.username : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function saveGameState() {
+    const user = currentUsername();
+    if (!user) return;
+    try {
+        localStorage.setItem('bm_save_' + user, JSON.stringify({
+            board: state.board.slice(),
+            mode: state.mode === 'spawn' ? 'spawn' : 'idle',
+            savedAt: Date.now()
+        }));
+        // Flash "✓ saved" indicator
+        const indicator = document.getElementById('session-saved');
+        if (indicator) {
+            indicator.textContent = '✓ محفوظ';
+            clearTimeout(saveGameState._fadeTimer);
+            saveGameState._fadeTimer = setTimeout(() => {
+                indicator.textContent = '';
+            }, 1800);
+        }
+    } catch (_) {}
+}
+
+function loadGameState() {
+    const user = currentUsername();
+    if (!user) return false;
+    try {
+        const raw = localStorage.getItem('bm_save_' + user);
+        if (!raw) return false;
+        const saved = JSON.parse(raw);
+        if (!saved || !Array.isArray(saved.board) || saved.board.length !== 16) return false;
+
+        state.board = saved.board.map(v => Number(v) || 0);
+
+        if (saved.mode === 'spawn') {
+            state.mode = 'spawn';
+            setAIArrow('…', false);
+            setAIStatus('في انتظار وضع الحيوان…');
+            setModeBar('⚡   انقر على أي خلية فارغة لوضع حيوان');
+        }
+
+        // Show "game restored" notice
+        const when = saved.savedAt ?
+            new Date(saved.savedAt).toLocaleTimeString() :
+            '';
+        setAIStatus('تم استعادة اللعبة' + (when ? ' (محفوظة ' + when + ')' : '') + ' – اضغط تحليل');
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+function clearSavedGame() {
+    const user = currentUsername();
+    if (user) localStorage.removeItem('bm_save_' + user);
+}
+
+/* ================================================================
+   SESSION DISPLAY & LOGOUT
+   ================================================================ */
+function logoutGame() {
+    if (confirm('هل تريد العودة إلى شاشة تسجيل الدخول؟\n\nاللوحة محفوظة تلقائياً وستجدها عند عودتك.')) {
+        localStorage.removeItem('bm_session');
+        window.location.replace('login.html');
+    }
+}
+
+/* ── حساب الوقت المتبقي ── */
+function getRemainingInfo(expiresAt) {
+    if (!expiresAt) return null;
+    const remaining = new Date(expiresAt).getTime() - Date.now();
+    if (remaining <= 0) return {
+        text: '⛔ انتهت الصلاحية',
+        color: '#ef5350',
+        expired: true
+    };
+    const days = Math.floor(remaining / 86400000);
+    const hours = Math.floor((remaining % 86400000) / 3600000);
+    const mins = Math.floor((remaining % 3600000) / 60000);
+    if (days >= 2) return {
+        text: '⏳ ' + days + ' أيام',
+        color: '#81c784',
+        expired: false
+    };
+    if (days === 1) return {
+        text: '⏳ يوم و' + hours + ' ساعة',
+        color: '#ffe082',
+        expired: false
+    };
+    if (hours > 0) return {
+        text: '⚠ ' + hours + ' ساعة!',
+        color: '#ffab40',
+        expired: false
+    };
+    return {
+        text: '🔴 ' + mins + ' دقيقة!',
+        color: '#ef5350',
+        expired: false
+    };
+}
+
+function updateSessionTime() {
+    try {
+        const sess = JSON.parse(localStorage.getItem('bm_session') || 'null');
+        const users = JSON.parse(localStorage.getItem('bm_users') || '[]');
+        if (!sess) return;
+        const user = users.find(u => u.username === sess.username);
+        if (!user || !user.expiresAt) return;
+
+        const info = getRemainingInfo(user.expiresAt);
+        const el = document.getElementById('session-time');
+        if (!el || !info) return;
+
+        if (info.expired) {
+            // Kick out immediately
+            localStorage.removeItem('bm_session');
+            alert('انتهت صلاحية حسابك. سيتم تسجيل خروجك.');
+            window.location.replace('login.html');
+            return;
+        }
+        el.textContent = info.text;
+        el.style.color = info.color;
+    } catch (_) {}
+}
+
+function initSessionDisplay() {
+    try {
+        const sess = JSON.parse(localStorage.getItem('bm_session') || 'null');
+        if (sess && sess.username) {
+            const el = document.getElementById('session-user');
+            if (el) el.textContent = '⚔ ' + sess.username;
+        }
+    } catch (_) {}
+    // Show time immediately then refresh every 60 seconds
+    updateSessionTime();
+    setInterval(updateSessionTime, 60000);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+    initSessionDisplay();
+});
